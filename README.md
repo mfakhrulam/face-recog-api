@@ -65,6 +65,20 @@ It will start:
 * Swagger Docs at: `http://localhost:8000/docs`
 * Static images at: `http://localhost:8000/static/<filename>`
 
+### ⚠️ Note on First-Time Run
+
+The first time you use the **register** or **recognize** API endpoints, the process might take a while because pre-trained models (such as RetinaFace and Facenet512 from DeepFace) need to be downloaded.
+
+This is a one-time download. Once the models are cached locally inside the container, subsequent runs will be much faster.
+
+If you've already built the image once, you don't need to use the `--build` flag again. Just run:
+
+```bash
+docker-compose up
+```
+
+to start the application without re-downloading the models or rebuilding the image.
+
 ---
 
 ## 📡 API Endpoints
