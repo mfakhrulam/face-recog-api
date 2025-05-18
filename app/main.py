@@ -1,19 +1,21 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
-from crud import register_face, list_faces, delete_face_by_id, recognize_face
-from face_utils import detect_and_crop_face, extract_features
-import cv2
+from crud import list_faces_with_embeddings, register_face, list_faces, delete_face_by_id, recognize_face
+from face_utils import cosine_similarity, detect_and_crop_face, extract_features
 import os
 import uuid
 import numpy as np
 from fastapi.staticfiles import StaticFiles
+from settings import STATIC_DIR
+import models
+from database import engine
+import traceback
 
-
-STATIC_DIR = "static"
 os.makedirs(STATIC_DIR, exist_ok=True)
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
+models.Base.metadata.create_all(bind=engine)
 
 @app.get("/api/face")
 def get_faces():
@@ -32,7 +34,7 @@ async def register(name: str = Form(...), file: UploadFile = File(...)):
     cropped_path = detect_and_crop_face(original_path)
     embedding = extract_features(cropped_path)
     
-    face = register_face(name, embedding, f"/static/{filename}", f"/static/{cropped_path}")
+    face = register_face(name, embedding, f"/static/{filename}", f"/{cropped_path}")
     
     return {
       "id": face.id,
@@ -49,6 +51,8 @@ async def register(name: str = Form(...), file: UploadFile = File(...)):
   except Exception as e:
     if os.path.exists(original_path):
       os.remove(original_path)
+    traceback.print_exc()
+
     raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -63,27 +67,57 @@ async def recognize(file: UploadFile = File(...)):
   try:
     cropped_path = detect_and_crop_face(temp_path)
     embedding = extract_features(cropped_path)
-    match = recognize_face(embedding)
+    
+    known_faces = list_faces_with_embeddings()
+    if not known_faces:
+      raise HTTPException(status_code=404, detail="No registered faces in database.")
+
     os.remove(cropped_path)
     os.remove(temp_path)
-    if match:
+    
+    similarities = [
+      (face, cosine_similarity(embedding, face.embedding)) for face in known_faces
+    ]
+    
+    most_similar_face, score = max(similarities, key=lambda x: x[1])
+    THRESHOLD = 0.5
+    if score >= THRESHOLD:
       return {
-        "id": match.id,
-        "name": match.name,
-        "image_path": match.image_path,
+        "matched": True,
+        "id": most_similar_face.id,
+        "name": most_similar_face.name,
+        "image_path": most_similar_face.image_path,
+        "cropped_image_path": most_similar_face.cropped_image_path,
+        "score": score
       }
     else:
-      return JSONResponse(
-        content={"detail": "No match found."}, 
-        status_code=404
-      )
+      return {"matched": False, "detail": "No match found."}
+
+    # match = recognize_face(embedding)
+    # os.remove(cropped_path)
+    # os.remove(temp_path)
+    # if match:
+    #   return {
+    #     "id": match.id,
+    #     "name": match.name,
+    #     "image_path": match.image_path,
+    #     "cropped_image_path": match.cropped_image_path
+    #   }
+    # else:
+    #   return JSONResponse(
+    #     content={"detail": "No match found."}, 
+    #     status_code=404
+    #   )
     
   
   except ValueError as ve:
     if os.path.exists(temp_path):
       os.remove(temp_path)
     raise HTTPException(status_code=400, detail=str(ve))
-
+  
+  except HTTPException:
+    raise
+  
   except Exception as e:
     if os.path.exists(temp_path):
       os.remove(temp_path)
